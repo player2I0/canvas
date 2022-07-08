@@ -16723,6 +16723,1653 @@ cr.plugins_.Function = function(runtime)
 }());
 ;
 ;
+cr.plugins_.Mouse = function(runtime)
+{
+	this.runtime = runtime;
+};
+(function ()
+{
+	var pluginProto = cr.plugins_.Mouse.prototype;
+	pluginProto.Type = function(plugin)
+	{
+		this.plugin = plugin;
+		this.runtime = plugin.runtime;
+	};
+	var typeProto = pluginProto.Type.prototype;
+	typeProto.onCreate = function()
+	{
+	};
+	pluginProto.Instance = function(type)
+	{
+		this.type = type;
+		this.runtime = type.runtime;
+		this.buttonMap = new Array(4);		// mouse down states
+		this.mouseXcanvas = 0;				// mouse position relative to canvas
+		this.mouseYcanvas = 0;
+		this.triggerButton = 0;
+		this.triggerType = 0;
+		this.triggerDir = 0;
+		this.handled = false;
+	};
+	var instanceProto = pluginProto.Instance.prototype;
+	instanceProto.onCreate = function()
+	{
+		var self = this;
+		if (!this.runtime.isDomFree)
+		{
+			jQuery(document).mousemove(
+				function(info) {
+					self.onMouseMove(info);
+				}
+			);
+			jQuery(document).mousedown(
+				function(info) {
+					self.onMouseDown(info);
+				}
+			);
+			jQuery(document).mouseup(
+				function(info) {
+					self.onMouseUp(info);
+				}
+			);
+			jQuery(document).dblclick(
+				function(info) {
+					self.onDoubleClick(info);
+				}
+			);
+			var wheelevent = function(info) {
+								self.onWheel(info);
+							};
+			document.addEventListener("mousewheel", wheelevent, false);
+			document.addEventListener("DOMMouseScroll", wheelevent, false);
+		}
+	};
+	var dummyoffset = {left: 0, top: 0};
+	instanceProto.onMouseMove = function(info)
+	{
+		var offset = this.runtime.isDomFree ? dummyoffset : jQuery(this.runtime.canvas).offset();
+		this.mouseXcanvas = info.pageX - offset.left;
+		this.mouseYcanvas = info.pageY - offset.top;
+	};
+	instanceProto.mouseInGame = function ()
+	{
+		if (this.runtime.fullscreen_mode > 0)
+			return true;
+		return this.mouseXcanvas >= 0 && this.mouseYcanvas >= 0
+		    && this.mouseXcanvas < this.runtime.width && this.mouseYcanvas < this.runtime.height;
+	};
+	instanceProto.onMouseDown = function(info)
+	{
+		if (!this.mouseInGame())
+			return;
+		this.buttonMap[info.which] = true;
+		this.runtime.isInUserInputEvent = true;
+		this.runtime.trigger(cr.plugins_.Mouse.prototype.cnds.OnAnyClick, this);
+		this.triggerButton = info.which - 1;	// 1-based
+		this.triggerType = 0;					// single click
+		this.runtime.trigger(cr.plugins_.Mouse.prototype.cnds.OnClick, this);
+		this.runtime.trigger(cr.plugins_.Mouse.prototype.cnds.OnObjectClicked, this);
+		this.runtime.isInUserInputEvent = false;
+	};
+	instanceProto.onMouseUp = function(info)
+	{
+		if (!this.buttonMap[info.which])
+			return;
+		if (this.runtime.had_a_click && !this.runtime.isMobile)
+			info.preventDefault();
+		this.runtime.had_a_click = true;
+		this.buttonMap[info.which] = false;
+		this.runtime.isInUserInputEvent = true;
+		this.triggerButton = info.which - 1;	// 1-based
+		this.runtime.trigger(cr.plugins_.Mouse.prototype.cnds.OnRelease, this);
+		this.runtime.isInUserInputEvent = false;
+	};
+	instanceProto.onDoubleClick = function(info)
+	{
+		if (!this.mouseInGame())
+			return;
+		info.preventDefault();
+		this.runtime.isInUserInputEvent = true;
+		this.triggerButton = info.which - 1;	// 1-based
+		this.triggerType = 1;					// double click
+		this.runtime.trigger(cr.plugins_.Mouse.prototype.cnds.OnClick, this);
+		this.runtime.trigger(cr.plugins_.Mouse.prototype.cnds.OnObjectClicked, this);
+		this.runtime.isInUserInputEvent = false;
+	};
+	instanceProto.onWheel = function (info)
+	{
+		var delta = info.wheelDelta ? info.wheelDelta : info.detail ? -info.detail : 0;
+		this.triggerDir = (delta < 0 ? 0 : 1);
+		this.handled = false;
+		this.runtime.isInUserInputEvent = true;
+		this.runtime.trigger(cr.plugins_.Mouse.prototype.cnds.OnWheel, this);
+		this.runtime.isInUserInputEvent = false;
+		if (this.handled && cr.isCanvasInputEvent(info))
+			info.preventDefault();
+	};
+	instanceProto.onWindowBlur = function ()
+	{
+		var i, len;
+		for (i = 0, len = this.buttonMap.length; i < len; ++i)
+		{
+			if (!this.buttonMap[i])
+				continue;
+			this.buttonMap[i] = false;
+			this.triggerButton = i - 1;
+			this.runtime.trigger(cr.plugins_.Mouse.prototype.cnds.OnRelease, this);
+		}
+	};
+	function Cnds() {};
+	Cnds.prototype.OnClick = function (button, type)
+	{
+		return button === this.triggerButton && type === this.triggerType;
+	};
+	Cnds.prototype.OnAnyClick = function ()
+	{
+		return true;
+	};
+	Cnds.prototype.IsButtonDown = function (button)
+	{
+		return this.buttonMap[button + 1];	// jQuery uses 1-based buttons for some reason
+	};
+	Cnds.prototype.OnRelease = function (button)
+	{
+		return button === this.triggerButton;
+	};
+	Cnds.prototype.IsOverObject = function (obj)
+	{
+		var cnd = this.runtime.getCurrentCondition();
+		var mx = this.mouseXcanvas;
+		var my = this.mouseYcanvas;
+		return cr.xor(this.runtime.testAndSelectCanvasPointOverlap(obj, mx, my, cnd.inverted), cnd.inverted);
+	};
+	Cnds.prototype.OnObjectClicked = function (button, type, obj)
+	{
+		if (button !== this.triggerButton || type !== this.triggerType)
+			return false;	// wrong click type
+		return this.runtime.testAndSelectCanvasPointOverlap(obj, this.mouseXcanvas, this.mouseYcanvas, false);
+	};
+	Cnds.prototype.OnWheel = function (dir)
+	{
+		this.handled = true;
+		return dir === this.triggerDir;
+	};
+	pluginProto.cnds = new Cnds();
+	function Acts() {};
+	var lastSetCursor = null;
+	Acts.prototype.SetCursor = function (c)
+	{
+		if (this.runtime.isDomFree)
+			return;
+		var cursor_style = ["auto", "pointer", "text", "crosshair", "move", "help", "wait", "none"][c];
+		if (lastSetCursor === cursor_style)
+			return;		// redundant
+		lastSetCursor = cursor_style;
+		document.body.style.cursor = cursor_style;
+	};
+	Acts.prototype.SetCursorSprite = function (obj)
+	{
+		if (this.runtime.isDomFree || this.runtime.isMobile || !obj)
+			return;
+		var inst = obj.getFirstPicked();
+		if (!inst || !inst.curFrame)
+			return;
+		var frame = inst.curFrame;
+		if (lastSetCursor === frame)
+			return;		// already set this frame
+		lastSetCursor = frame;
+		var datauri = frame.getDataUri();
+		var cursor_style = "url(" + datauri + ") " + Math.round(frame.hotspotX * frame.width) + " " + Math.round(frame.hotspotY * frame.height) + ", auto";
+		document.body.style.cursor = "";
+		document.body.style.cursor = cursor_style;
+	};
+	pluginProto.acts = new Acts();
+	function Exps() {};
+	Exps.prototype.X = function (ret, layerparam)
+	{
+		var layer, oldScale, oldZoomRate, oldParallaxX, oldAngle;
+		if (cr.is_undefined(layerparam))
+		{
+			layer = this.runtime.getLayerByNumber(0);
+			oldScale = layer.scale;
+			oldZoomRate = layer.zoomRate;
+			oldParallaxX = layer.parallaxX;
+			oldAngle = layer.angle;
+			layer.scale = 1;
+			layer.zoomRate = 1.0;
+			layer.parallaxX = 1.0;
+			layer.angle = 0;
+			ret.set_float(layer.canvasToLayer(this.mouseXcanvas, this.mouseYcanvas, true));
+			layer.scale = oldScale;
+			layer.zoomRate = oldZoomRate;
+			layer.parallaxX = oldParallaxX;
+			layer.angle = oldAngle;
+		}
+		else
+		{
+			if (cr.is_number(layerparam))
+				layer = this.runtime.getLayerByNumber(layerparam);
+			else
+				layer = this.runtime.getLayerByName(layerparam);
+			if (layer)
+				ret.set_float(layer.canvasToLayer(this.mouseXcanvas, this.mouseYcanvas, true));
+			else
+				ret.set_float(0);
+		}
+	};
+	Exps.prototype.Y = function (ret, layerparam)
+	{
+		var layer, oldScale, oldZoomRate, oldParallaxY, oldAngle;
+		if (cr.is_undefined(layerparam))
+		{
+			layer = this.runtime.getLayerByNumber(0);
+			oldScale = layer.scale;
+			oldZoomRate = layer.zoomRate;
+			oldParallaxY = layer.parallaxY;
+			oldAngle = layer.angle;
+			layer.scale = 1;
+			layer.zoomRate = 1.0;
+			layer.parallaxY = 1.0;
+			layer.angle = 0;
+			ret.set_float(layer.canvasToLayer(this.mouseXcanvas, this.mouseYcanvas, false));
+			layer.scale = oldScale;
+			layer.zoomRate = oldZoomRate;
+			layer.parallaxY = oldParallaxY;
+			layer.angle = oldAngle;
+		}
+		else
+		{
+			if (cr.is_number(layerparam))
+				layer = this.runtime.getLayerByNumber(layerparam);
+			else
+				layer = this.runtime.getLayerByName(layerparam);
+			if (layer)
+				ret.set_float(layer.canvasToLayer(this.mouseXcanvas, this.mouseYcanvas, false));
+			else
+				ret.set_float(0);
+		}
+	};
+	Exps.prototype.AbsoluteX = function (ret)
+	{
+		ret.set_float(this.mouseXcanvas);
+	};
+	Exps.prototype.AbsoluteY = function (ret)
+	{
+		ret.set_float(this.mouseYcanvas);
+	};
+	pluginProto.exps = new Exps();
+}());
+;
+;
+cr.plugins_.Multiplayer = function(runtime)
+{
+	this.runtime = runtime;
+};
+(function ()
+{
+	var pluginProto = cr.plugins_.Multiplayer.prototype;
+	pluginProto.Type = function(plugin)
+	{
+		this.plugin = plugin;
+		this.runtime = plugin.runtime;
+	};
+	var typeProto = pluginProto.Type.prototype;
+	typeProto.onCreate = function()
+	{
+	};
+	pluginProto.Instance = function(type)
+	{
+		this.type = type;
+		this.runtime = type.runtime;
+	};
+	var instanceProto = pluginProto.Instance.prototype;
+	var isSupported = false;
+	var serverlist = [];
+	instanceProto.onCreate = function()
+	{
+		this.mp = null;
+		isSupported = window["C2Multiplayer_IsSupported"]();
+		if (isSupported && typeof window["C2Multiplayer"] !== "undefined")
+			this.mp = new window["C2Multiplayer"]();
+		this.signallingUrl = "";
+		this.errorMsg = "";
+		this.peerID = "";
+		this.peerAlias = "";
+		this.leaveReason = "";
+		this.msgContent = "";
+		this.msgTag = "";
+		this.msgFromId = "";
+		this.msgFromAlias = "";
+		this.typeToRo = {};
+		this.instToPeer = {};
+		this.peerToInst = {};
+		this.gameInstanceList = null;
+		this.roomList = null;
+		this.wakerWorker = null;
+		this.inputPredictObjects = [];
+		this.trackObjects = [];				// objects to keep a history for
+		this.objectHistories = {};
+		var self = this;
+		if (isSupported)
+		{
+			this.mp["onserverlist"] = function (servers) {
+				serverlist = servers;
+				self.runtime.trigger(cr.plugins_.Multiplayer.prototype.cnds.OnServerList, self);
+			};
+			this.mp["onsignallingerror"] = function (e) {
+				self.setError(e);
+				self.runtime.trigger(cr.plugins_.Multiplayer.prototype.cnds.OnSignallingError, self);
+			};
+			this.mp["onsignallingclose"] = function () {
+				self.runtime.trigger(cr.plugins_.Multiplayer.prototype.cnds.OnSignallingDisconnected, self);
+				self.signallingUrl = "";
+			};
+			this.mp["onsignallingwelcome"] = function () {
+				self.runtime.trigger(cr.plugins_.Multiplayer.prototype.cnds.OnSignallingConnected, self);
+			};
+			this.mp["onsignallinglogin"] = function () {
+				self.runtime.trigger(cr.plugins_.Multiplayer.prototype.cnds.OnSignallingLoggedIn, self);
+			};
+			this.mp["onsignallingjoin"] = function (became_host) {
+				self.instToPeer = {};
+				self.peerToInst = {};
+				self.trackObjects.length = 0;
+				self.inputPredictObjects.length = 0;
+				self.objectHistories = {};
+				self.runtime.trigger(cr.plugins_.Multiplayer.prototype.cnds.OnSignallingJoinedRoom, self);
+				if (self.runtime.isSuspended && became_host)
+				{
+					self.wakerWorker.postMessage("start");
+				}
+			};
+			this.mp["onsignallingleave"] = function () {
+				self.runtime.trigger(cr.plugins_.Multiplayer.prototype.cnds.OnSignallingLeftRoom, self);
+			};
+			this.mp["onsignallingkicked"] = function () {
+				self.runtime.trigger(cr.plugins_.Multiplayer.prototype.cnds.OnSignallingKicked, self);
+			};
+			this.mp["onbeforeclientupdate"] = function () {
+				self.runtime.trigger(cr.plugins_.Multiplayer.prototype.cnds.OnClientUpdate, self);
+			};
+			this.mp["onpeeropen"] = function (peer) {
+				self.peerID = peer["id"];
+				self.peerAlias = peer["alias"];
+				self.runtime.trigger(cr.plugins_.Multiplayer.prototype.cnds.OnPeerConnected, self);
+			};
+			this.mp["onpeerclose"] = function (peer, reason) {
+				self.peerID = peer["id"];
+				self.peerAlias = peer["alias"];
+				self.leaveReason = reason || "unknown";
+				var inst = self.getAssociatedInstanceForPeer(peer);
+				if (inst)
+				{
+					var ro = self.typeToRo[inst.type];
+					if (ro)
+						ro["removeObjectNid"](peer["nid"]);
+					self.runtime.DestroyInstance(inst);
+				}
+				if (self.peerToInst.hasOwnProperty(peer["id"]))
+					delete self.peerToInst[peer["id"]];
+				self.runtime.trigger(cr.plugins_.Multiplayer.prototype.cnds.OnPeerDisconnected, self);
+			};
+			this.mp["onpeermessage"] = function (peer, o) {
+				self.msgTag = o["t"];
+				if (o["f"])
+					self.msgFromId = o["f"];
+				else
+					self.msgFromId = peer["id"];
+				self.msgFromAlias = self.mp["getAliasFromId"](self.msgFromId);
+				self.msgContent = o["m"];
+				self.runtime.trigger(cr.plugins_.Multiplayer.prototype.cnds.OnAnyPeerMessage, self);
+				self.runtime.trigger(cr.plugins_.Multiplayer.prototype.cnds.OnPeerMessage, self);
+			};
+			this.mp["onsignallinginstancelist"] = function (list) {
+				self.gameInstanceList = list;
+				self.runtime.trigger(cr.plugins_.Multiplayer.prototype.cnds.OnGameInstanceList, self);
+			};
+			this.mp["onsignallingroomlist"] = function (list) {
+				self.roomList = list;
+				self.runtime.trigger(cr.plugins_.Multiplayer.prototype.cnds.OnRoomList, self);
+			};
+			this.mp["ongetobjectcount"] = function (obj) {
+				return obj.instances.length;
+			};
+			this.mp["ongetobjectvalue"] = function (obj, index, nv) {
+				if (!nv)
+					return obj.instances[index].uid;
+				var tag = nv["tag"];
+				var inst = obj.instances[index];
+				var value, peer;
+				switch (tag) {
+				case "x":
+					return inst.x;
+				case "y":
+					return inst.y;
+				case "a":
+					return inst.angle;
+				case "iv":
+					if (nv["clientvaluetag"])
+					{
+						peer = self.instToPeer[inst.uid];
+						if (peer && self.mp["me"] !== peer && !peer["wasRemoved"] && peer["hasClientState"](nv["clientvaluetag"]))
+						{
+							return peer["getInterpClientState"](nv["clientvaluetag"]);
+						}
+					}
+					value = inst.instance_vars[nv["userdata"]];
+					if (typeof value === "number")
+						return value;
+					else
+						return 0;
+				default:
+					return 0;
+				}
+			};
+			this.mp["oninstancedestroyed"] = function (ro, nid, timestamp)
+			{
+				var userdata = ro["userdata"];
+				var instmap = userdata.instmap;		// map NID to C2 instance
+				if (!userdata.deadmap)
+					userdata.deadmap = {};
+				var deadmap = userdata.deadmap;
+				deadmap[nid] = timestamp;
+				if (!instmap)
+				{
+					return;
+				}
+				if (instmap.hasOwnProperty(nid))
+				{
+					var inst = instmap[nid];
+					if (inst)
+					{
+						self.runtime.DestroyInstance(inst);
+					}
+					delete instmap[nid];
+				}
+			};
+			this.runtime.addDestroyCallback(function (inst)
+			{
+				var p;
+				var uid = inst.uid;
+				if (self.instToPeer.hasOwnProperty(uid))
+					delete self.instToPeer[uid];
+				for (p in self.peerToInst)
+				{
+					if (self.peerToInst.hasOwnProperty(p))
+					{
+						if (self.peerToInst[p] === inst)
+						{
+							delete self.peerToInst[p];
+							break;
+						}
+					}
+				}
+				if (self.objectHistories.hasOwnProperty(uid))
+					delete self.objectHistories[uid];
+				var i = self.inputPredictObjects.indexOf(inst);
+				if (i > -1)
+					self.inputPredictObjects.splice(i, 1);
+				i = self.trackObjects.indexOf(inst);
+				if (i > -1)
+					self.trackObjects.splice(i, 1);
+				self.mp["removeObjectId"](uid);
+			});
+			this.wakerWorker = new Worker("waker.js");
+			this.wakerWorker.addEventListener("message", function (e) {
+				if (e.data === "tick" && self.runtime.isSuspended)
+				{
+					self.runtime.tick(true);
+				}
+			}, false);
+			this.wakerWorker.postMessage("");
+		}
+		this.runtime.addSuspendCallback(function (s) {
+			if (!isSupported || !self.mp["isHost"]())
+				return;
+			if (s)
+			{
+				self.wakerWorker.postMessage("start");
+			}
+			else
+			{
+				self.wakerWorker.postMessage("stop");
+			}
+		});
+		this.runtime.pretickMe(this);
+	};
+	instanceProto.getAssociatedInstanceForPeer = function (peer)
+	{
+		var peer_id = peer["id"];
+		if (this.peerToInst.hasOwnProperty(peer_id))
+			return this.peerToInst[peer_id];
+		else
+			return null;
+	};
+	instanceProto.isInputPredicting = function (inst)
+	{
+		return this.inputPredictObjects.indexOf(inst) >= 0;
+	};
+	instanceProto.pretick = function ()
+	{
+		if (!isSupported)
+			return;
+		this.mp["tick"](this.runtime.dt1);
+		this.trackObjectHistories();
+		var i, len, ro;
+		if (this.mp["isInRoom"]() && !this.mp["isHost"]())
+		{
+			for (i = 0, len = this.mp["registeredObjects"].length; i < len; ++i)
+			{
+				ro = this.mp["registeredObjects"][i];
+				this.updateRegisteredObject(ro);
+			}
+		}
+	};
+	var netInstToRemove = [];
+	instanceProto.updateRegisteredObject = function (ro)
+	{
+		ro["tick"]();
+		var type = ro["obj"];
+		var count = ro["getCount"]();
+		var netvalues = ro["netvalues"];
+		var userdata = ro["userdata"];
+		if (!userdata.instmap)
+			userdata.instmap = {};
+		var instmap = userdata.instmap;		// map NID to C2 instance
+		var deadmap = userdata.deadmap;
+		var simTime = ro["simTime"];
+		var i, netinst, nid, inst, peer, nv, iv, value, j, p, created, lenj = netvalues.length;
+		var p;
+		for (p in instmap)
+		{
+			if (instmap.hasOwnProperty(p))
+			{
+				inst = instmap[p];
+				if (!this.runtime.getObjectByUID(inst.uid))
+					delete instmap[p];
+			}
+		}
+		if (deadmap)
+		{
+			for (p in deadmap)
+			{
+				if (deadmap.hasOwnProperty(p))
+				{
+					if (deadmap[p] < simTime - 3000)
+						delete deadmap[p];
+				}
+			}
+		}
+		for (i = 0; i < count; ++i)
+		{
+			netinst = ro["getNetInstAt"](i);
+			nid = netinst["nid"];
+			if (deadmap && deadmap[nid] >= simTime - 3000)
+			{
+				netInstToRemove.push(netinst);
+				if (instmap.hasOwnProperty(nid))
+				{
+					this.runtime.DestroyInstance(instmap[nid]);
+					delete instmap[nid];
+				}
+				continue;
+			}
+			if (instmap.hasOwnProperty(nid))
+			{
+				inst = instmap[nid];
+				created = false;
+			}
+			else
+			{
+				peer = this.mp["getPeerByNid"](nid);
+				if (peer)
+				{
+					this.peerID = peer["id"];
+					this.peerAlias = peer["alias"];
+				}
+				else
+				{
+					if (ro["hasOverriddenNids"])
+					{
+						continue;
+					}
+					this.peerID = "";
+					this.peerAlias = "";
+				}
+				inst = this.runtime.createInstance(type, this.runtime.running_layout.layers[type.default_layerindex], -1000, -1000);
+				instmap[nid] = inst;
+				created = true;
+			}
+			if (netinst["isTimedOut"](simTime))
+			{
+				netInstToRemove.push(netinst);
+				if (instmap.hasOwnProperty(nid))
+					delete instmap[nid];
+				this.runtime.DestroyInstance(inst);
+				continue;
+			}
+			if (this.isInputPredicting(inst))
+			{
+				this.correctInputPrediction(inst, netinst, netvalues, simTime);
+			}
+			else
+			{
+				for (j = 0; j < lenj; ++j)
+				{
+					value = netinst["getInterp"](simTime, j);
+					nv = netvalues[j];
+					switch (nv["tag"]) {
+					case "x":
+						inst.x = value;
+						inst.set_bbox_changed();
+						break;
+					case "y":
+						inst.y = value;
+						inst.set_bbox_changed();
+						break;
+					case "a":
+						inst.angle = value;
+						inst.set_bbox_changed();
+						break;
+					case "iv":
+						iv = nv["userdata"];
+						if (iv > inst.instance_vars.length || typeof inst.instance_vars[iv] !== "number")
+							break;
+						inst.instance_vars[iv] = value;
+						break;
+					}
+				}
+			}
+			if (created)
+			{
+				this.runtime.trigger(Object.getPrototypeOf(type.plugin).cnds.OnCreated, inst);
+			}
+		}
+		for (i = 0, count = netInstToRemove.length; i < count; ++i)
+		{
+			ro["removeNetInstance"](netInstToRemove[i]);
+		}
+		netInstToRemove.length = 0;
+	};
+	instanceProto.trackObjectHistories = function ()
+	{
+		var hosttime = this.mp["getHostInputArrivalTime"]();
+		var i, len;
+		for (i = 0, len = this.trackObjects.length; i < len; ++i)
+		{
+			this.trackObjectHistory(this.trackObjects[i], hosttime);
+		}
+	};
+	function ObjectHistory(inst_)
+	{
+		this.inst = inst_;
+		this.history = [];
+	};
+	ObjectHistory.prototype.getLastDelta = function (tag, i)
+	{
+		if (this.history.length < 2)
+			return 0;		// not yet enough data
+		var from = this.history[this.history.length - 2];
+		var to = this.history[this.history.length - 1];
+		switch (tag) {
+		case "x":
+			return to.x - from.x;
+		case "y":
+			return to.y - from.y;
+		case "a":
+			return to.angle - from.angle;
+		case "iv":
+			return to.ivs[i] - from.ivs[i];
+		}
+		return 0;
+	};
+	ObjectHistory.prototype.getInterp = function (tag, index, time, interp)
+	{
+		var i, len, h;
+		var prev = null;
+		var next = null;
+		for (i = 0, len = this.history.length; i < len; ++i)
+		{
+			h = this.history[i];
+			if (h.timestamp < time)
+				prev = h;
+			else
+			{
+				if (i + 1 < this.history.length)
+					next = this.history[i + 1];
+				break;
+			}
+		}
+		if (!prev)
+			return (void 0);
+		var prev_value = 0;
+		switch (tag) {
+		case "x":
+			prev_value = prev.x;
+			break;
+		case "y":
+			prev_value = prev.y;
+			break;
+		case "a":
+			prev_value = prev.angle;
+			break;
+		case "iv":
+			prev_value = prev.ivs[index];
+			break;
+		}
+		if (!next)
+			return prev_value;
+		var next_value = prev_value;
+		switch (tag) {
+		case "x":
+			next_value = next.x;
+			break;
+		case "y":
+			next_value = next.y;
+			break;
+		case "a":
+			next_value = next.angle;
+			break;
+		case "iv":
+			next_value = next.ivs[index];
+			break;
+		}
+		var x = cr.unlerp(prev.timestamp, next.timestamp, time);
+		return window["interpNetValue"](interp, prev_value, next_value, x, false);
+	};
+	ObjectHistory.prototype.applyCorrection = function (tag, index, correction)
+	{
+		var i, len, h;
+		for (i = 0, len = this.history.length; i < len; ++i)
+		{
+			h = this.history[i];
+			switch (tag) {
+			case "x":
+				h.x += correction;
+				break;
+			case "y":
+				h.y += correction;
+				break;
+			case "a":
+				h.angle += correction;
+				break;
+			case "iv":
+				h.ivs[index] += correction;
+				break;
+			}
+		};
+	};
+	function ObjectHistoryEntry(oh_)
+	{
+		this.oh = oh_;
+		this.timestamp = 0;
+		this.x = 0;
+		this.y = 0;
+		this.angle = 0;
+		this.ivs = [];
+	};
+	var history_cache = [];
+	function allocHistoryEntry(oh_)
+	{
+		var ret;
+		if (history_cache.length)
+		{
+			ret = history_cache.pop();
+			ret.oh = oh_;
+			return ret;
+		}
+		else
+			return new ObjectHistoryEntry(oh_);
+	};
+	function freeHistoryEntry(he)
+	{
+		he.ivs.length = 0;
+		if (history_cache.length < 1000)
+			history_cache.push(he);
+	};
+	instanceProto.trackObjectHistory = function (inst, hosttime)
+	{
+		if (!this.objectHistories.hasOwnProperty(inst.uid))
+			this.objectHistories[inst.uid] = new ObjectHistory(inst);
+		var oh = this.objectHistories[inst.uid];
+		var he = allocHistoryEntry(oh);
+		he.timestamp = hosttime;
+		he.x = inst.x;
+		he.y = inst.y;
+		he.angle = inst.angle;
+		cr.shallowAssignArray(he.ivs, inst.instance_vars);
+		oh.history.push(he);
+		while (oh.history.length > 0 && oh.history[0].timestamp <= (hosttime - 2000))
+			freeHistoryEntry(oh.history.shift());
+	};
+	var clientXerror = 0;
+	var clientYerror = 0;
+	var hostX = 0;
+	var hostY = 0;
+	function linearCorrect(current, target, delta, position, isPlatformBehavior)
+	{
+		var diff = target - current;
+		if (diff === 0)
+			return 0;
+		var abs_diff = cr.abs(diff);
+		if (abs_diff <= cr.abs(delta / 10) || (position && (abs_diff < 1 || abs_diff >= 1000)))
+			return diff;
+		var minimum_correction = abs_diff / 50;
+		if (isPlatformBehavior)
+			minimum_correction = cr.max(minimum_correction, 1);
+		var delta_correction = cr.abs(delta / 5);
+		if (position && abs_diff >= 10)
+		{
+			minimum_correction = abs_diff / 10;
+			delta_correction = cr.abs(delta / 2);
+		}
+		var abs_correction = cr.max(minimum_correction, delta_correction);
+		if (abs_correction > abs_diff)
+			abs_correction = abs_diff;
+		if (diff > 0)
+			return abs_correction;
+		else
+			return -abs_correction;
+	};
+	instanceProto.correctInputPrediction = function (inst, netinst, netvalues, simTime)
+	{
+		if (!this.objectHistories.hasOwnProperty(inst.uid))
+			return;		// no data yet, leave as is
+		var oh = this.objectHistories[inst.uid];
+		var j, latestupdate, host_value, my_value, nv, diff, iv, tag, interp, userdata, correction;
+		var lenj = netvalues.length;
+		var position_delta = cr.distanceTo(0, 0, oh.getLastDelta("x"), oh.getLastDelta("y"));
+		var isPlatformBehavior = !!inst.extra["isPlatformBehavior"];
+		for (j = 0; j < lenj; ++j)
+		{
+			nv = netvalues[j];
+			tag = nv["tag"];
+			userdata = nv["userdata"];
+			interp = nv["interp"];
+			latestupdate = netinst["getLatestUpdate"]();
+			if (!latestupdate)
+				continue;		// no data from server
+			host_value = latestupdate.data[j];
+			my_value = oh.getInterp(tag, userdata, latestupdate.timestamp, interp);
+			if (typeof my_value === "undefined")
+				continue;		// no local history yet
+			correction = 0;
+			switch (tag) {
+			case "x":
+				correction = linearCorrect(my_value, host_value, position_delta, true, isPlatformBehavior);
+				if (correction !== 0)
+				{
+					inst.x += correction;
+					inst.set_bbox_changed();
+				}
+				clientXerror = host_value - my_value + correction;
+				hostX = host_value;
+				break;
+			case "y":
+				correction = linearCorrect(my_value, host_value, position_delta, true, isPlatformBehavior);
+				if (correction !== 0)
+				{
+					inst.y += correction;
+					inst.set_bbox_changed();
+				}
+				clientYerror = host_value - my_value + correction;
+				hostY = host_value;
+				break;
+			case "a":
+				correction = cr.anglelerp(my_value, host_value, 0.5) - my_value;
+				if (correction !== 0)
+				{
+					inst.angle += correction;
+					inst.set_bbox_changed();
+				}
+				break;
+			case "iv":
+				iv = userdata;
+				if (iv > inst.instance_vars.length || typeof inst.instance_vars[iv] !== "number")
+					break;
+				if (!nv["clientvaluetag"])
+					inst.instance_vars[iv] = netinst["getInterp"](simTime, j);
+				break;
+			}
+			if (correction !== 0)
+				oh.applyCorrection(tag, userdata, correction);
+		}
+	};
+	instanceProto.setError = function (e)
+	{
+		if (!e)
+			this.errorMsg = "unknown error";
+		else if (typeof e === "string")
+			this.errorMsg = e;
+		else if (typeof e.message === "string")
+			this.errorMsg = e.message;
+		else if (typeof e.details === "string")
+			this.errorMsg = e.details;
+		else if (typeof e.data === "string")
+			this.errorMsg = e.data;
+		else if (typeof e.type === "string")
+			this.errorMsg = e.type;
+		else
+			this.errorMsg = "error";
+	};
+	instanceProto.onDestroy = function ()
+	{
+	};
+	instanceProto.saveToJSON = function ()
+	{
+		return {
+		};
+	};
+	instanceProto.loadFromJSON = function (o)
+	{
+	};
+	function Cnds() {};
+	Cnds.prototype.OnServerList = function ()
+	{
+		return true;
+	};
+	Cnds.prototype.OnSignallingError = function ()
+	{
+		return true;
+	};
+	Cnds.prototype.OnSignallingConnected = function ()
+	{
+		return true;
+	};
+	Cnds.prototype.OnSignallingDisconnected = function ()
+	{
+		return true;
+	};
+	Cnds.prototype.OnSignallingLoggedIn = function ()
+	{
+		return true;
+	};
+	Cnds.prototype.OnSignallingJoinedRoom = function ()
+	{
+		return true;
+	};
+	Cnds.prototype.OnSignallingLeftRoom = function ()
+	{
+		return true;
+	};
+	Cnds.prototype.OnSignallingKicked = function ()
+	{
+		return true;
+	};
+	Cnds.prototype.OnPeerConnected = function ()
+	{
+		return true;
+	};
+	Cnds.prototype.OnPeerDisconnected = function ()
+	{
+		return true;
+	};
+	Cnds.prototype.SignallingIsConnected = function ()
+	{
+		return isSupported && this.mp["isConnected"]();
+	};
+	Cnds.prototype.SignallingIsLoggedIn = function ()
+	{
+		return isSupported && this.mp["isLoggedIn"]();
+	};
+	Cnds.prototype.SignallingIsInRoom = function ()
+	{
+		return isSupported && this.mp["isInRoom"]();
+	};
+	Cnds.prototype.IsHost = function ()
+	{
+		return isSupported && this.mp["isHost"]();
+	};
+	Cnds.prototype.IsSupported = function ()
+	{
+		return isSupported;
+	};
+	Cnds.prototype.OnPeerMessage = function (tag_)
+	{
+		return this.msgTag === tag_;
+	};
+	Cnds.prototype.OnAnyPeerMessage = function ()
+	{
+		return true;
+	};
+	Cnds.prototype.OnClientUpdate = function ()
+	{
+		return true;
+	};
+	Cnds.prototype.OnGameInstanceList = function ()
+	{
+		return true;
+	};
+	Cnds.prototype.OnRoomList = function ()
+	{
+		return true;
+	};
+	Cnds.prototype.IsReadyForInput = function ()
+	{
+		if (!isSupported)
+			return false;
+		return this.mp["isReadyForInput"]();
+	};
+	Cnds.prototype.ComparePeerCount = function (cmp_, x_)
+	{
+		var peercount = 0;
+		if (isSupported)
+			peercount = this.mp["getPeerCount"]();
+		return cr.do_cmp(peercount, cmp_, x_);
+	};
+	pluginProto.cnds = new Cnds();
+	function Acts() {};
+	Acts.prototype.RequestServerList = function (url_)
+	{
+		if (!isSupported)
+			return;
+		this.mp["requestServerList"](url_);
+	};
+	Acts.prototype.SignallingConnect = function (url_)
+	{
+		if (!isSupported || this.mp["isConnected"]())
+			return;
+		this.signallingUrl = url_;
+		this.mp["signallingConnect"](url_);
+	};
+	Acts.prototype.SignallingDisconnect = function ()
+	{
+		if (!isSupported || !this.mp["isConnected"]())
+			return;
+		this.mp["signallingDisconnect"]();
+	};
+	Acts.prototype.AddICEServer = function (url_, username_, credential_)
+	{
+		if (!isSupported)
+			return;
+		var o = {
+			"urls": url_
+		};
+		if (username_)
+			o["username"] = username_;
+		if (credential_)
+			o["credential"] = credential_;
+		this.mp["mergeIceServerList"]([o]);
+	};
+	Acts.prototype.SignallingLogin = function (alias_)
+	{
+		if (!isSupported || !this.mp["isConnected"] || this.mp["isLoggedIn"]())
+			return;
+		this.mp["signallingLogin"](alias_);
+	};
+	Acts.prototype.SignallingJoinRoom = function (game_, instance_, room_, max_clients_)
+	{
+		if (!isSupported || !this.mp["isLoggedIn"]() || this.mp["isInRoom"]())
+			return;
+		this.mp["signallingJoinGameRoom"](game_, instance_, room_, max_clients_);
+	};
+	Acts.prototype.SignallingAutoJoinRoom = function (game_, instance_, room_, max_clients_, locking_)
+	{
+		if (!isSupported || !this.mp["isLoggedIn"]() || this.mp["isInRoom"]())
+			return;
+		this.mp["signallingAutoJoinGameRoom"](game_, instance_, room_, max_clients_, (locking_ === 0));
+	};
+	Acts.prototype.SignallingLeaveRoom = function ()
+	{
+		if (!isSupported || !this.mp["isInRoom"]())
+			return;
+		this.mp["signallingLeaveRoom"]();
+	};
+	Acts.prototype.DisconnectRoom = function ()
+	{
+		if (!isSupported)
+			return;
+		this.mp["disconnectRoom"](true);
+	};
+	function modeToDCType(mode_)
+	{
+		switch (mode_) {
+		case 0:		// reliable ordered
+			return "o";
+		case 1:		// reliable unordered
+			return "r";
+		case 2:		// unreliable
+			return "u";
+		default:
+			return "o";
+		}
+	};
+	Acts.prototype.SendPeerMessage = function (peerid_, tag_, message_, mode_)
+	{
+		if (!isSupported)
+			return;
+		if (!peerid_)
+			peerid_ = this.mp["getHostID"]();
+		var peer = this.mp["getPeerById"](peerid_);
+		if (!peer)
+			return;
+		peer["send"](modeToDCType(mode_), JSON.stringify({
+			"c": "m",			// command: message
+			"t": tag_,			// tag
+			"m": message_		// content
+		}));
+	};
+	Acts.prototype.HostBroadcastMessage = function (from_id_, tag_, message_, mode_)
+	{
+		if (!isSupported)
+			return;
+		var skip = this.mp["getPeerById"](from_id_);
+		var o = {
+			"c": "m",			// command: message
+			"t": tag_,			// tag
+			"f": (from_id_ || this.mp["getHostID"]()),
+			"m": message_		// content
+		};
+		this.mp["hostBroadcast"](modeToDCType(mode_), JSON.stringify(o), skip);
+	};
+	Acts.prototype.SimulateLatency = function (latency_, pdv_, loss_)
+	{
+		if (!isSupported)
+			return;
+		this.mp["setLatencySimulation"](latency_ * 1000, pdv_ * 1000, loss_);
+	};
+	instanceProto.doSyncObject = function (type_, data_, precision_, bandwidth_)
+	{
+		if (!isSupported)
+			return;
+		var ro = this.mp["registerObject"](type_, type_.sid, bandwidth_);
+		if (data_ === 1)		// position only
+		{
+			ro["addValue"](this.mp["INTERP_LINEAR"], precision_, "x");		// for x
+			ro["addValue"](this.mp["INTERP_LINEAR"], precision_, "y");		// for y
+		}
+		else if (data_ === 2)	// angle only
+		{
+			ro["addValue"](this.mp["INTERP_ANGULAR"], precision_, "a");		// for angle
+		}
+		else if (data_ === 3)	// position and angle
+		{
+			ro["addValue"](this.mp["INTERP_LINEAR"], precision_, "x");		// for x
+			ro["addValue"](this.mp["INTERP_LINEAR"], precision_, "y");		// for y
+			ro["addValue"](this.mp["INTERP_ANGULAR"], precision_, "a");		// for angle
+		}
+		this.typeToRo[type_] = ro;
+	};
+	Acts.prototype.SyncObject = function (type_, data_, precision_, bandwidth_)
+	{
+		if (!isSupported)
+			return;
+		var i, len;
+		if (type_.is_family)
+		{
+			for (i = 0, len = type_.members.length; i < len; ++i)
+			{
+				this.doSyncObject(type_.members[i], data_, precision_, bandwidth_);
+			}
+		}
+		else
+		{
+			this.doSyncObject(type_, data_, precision_, bandwidth_);
+		}
+	};
+	var prompted_bad_sync = false;
+	instanceProto.doSyncObjectInstanceVar = function (type_, var_, precision_, interp_, clientvaluetag_)
+	{
+		if (!isSupported)
+			return;
+		var ro = this.typeToRo[type_];
+		if (!ro)
+		{
+			return;
+		}
+		var ip = this.mp["INTERP_NONE"];
+		if (interp_ === 1)		// linear interpolation
+			ip = this.mp["INTERP_LINEAR"];
+		else if (interp_ === 2)	// angular interpolation
+			ip = this.mp["INTERP_ANGULAR"];
+		ro["addValue"](ip, precision_, "iv", var_, clientvaluetag_);
+	};
+	Acts.prototype.SyncObjectInstanceVar = function (type_, var_, precision_, interp_, clientvaluetag_)
+	{
+		if (!isSupported)
+			return;
+		var i, len, t;
+		if (type_.is_family)
+		{
+			for (i = 0, len = type_.members.length; i < len; ++i)
+			{
+				t = type_.members[i];
+				this.doSyncObjectInstanceVar(t, var_ + t.family_var_map[type_.family_index], precision_, interp_, clientvaluetag_);
+			}
+		}
+		else
+		{
+			this.doSyncObjectInstanceVar(type_, var_, precision_, interp_, clientvaluetag_);
+		}
+	};
+	Acts.prototype.AssociateObjectWithPeer = function (type_, peerid_)
+	{
+		if (!isSupported)
+			return;
+		var inst = type_.getFirstPicked();
+		if (!inst)
+			return;
+		var ro = this.typeToRo[type_];
+		if (!ro)
+			return;
+		var peer = this.mp["getPeerById"](peerid_);
+		if (!peer)
+			return;
+		if (this.mp["isHost"]())
+		{
+			ro["overrideNid"](inst.uid, peer["nid"]);
+			if (this.trackObjects.indexOf(inst) === -1)		// only add if not already tracked
+				this.trackObjects.push(inst);
+		}
+		this.instToPeer[inst.uid] = peer;
+		this.peerToInst[peer["id"]] = inst;
+	};
+	Acts.prototype.SetClientState = function (tag, x)
+	{
+		if (!isSupported)
+			return;
+		this.mp["setClientState"](tag, x);
+	};
+	Acts.prototype.AddClientInputValue = function (tag, precision, interpolation)
+	{
+		if (!isSupported)
+			return;
+		this.mp["addClientInputValue"](tag, precision, interpolation);
+	};
+	Acts.prototype.InputPredictObject = function (obj)
+	{
+		if (!isSupported || !obj)
+			return;
+		if (this.mp["isHost"]())
+			return;		// host mustn't input predict anything
+		var inst = obj.getFirstPicked();
+		if (!inst)
+			return;
+		if (this.inputPredictObjects.indexOf(inst) >= 0)
+			return;		// already input predicted
+		inst.extra["inputPredicted"] = true;
+		this.trackObjects.push(inst);
+		this.inputPredictObjects.push(inst);
+	};
+	Acts.prototype.SignallingRequestGameInstanceList = function (game_)
+	{
+		if (!isSupported)
+			return;
+		this.mp["signallingRequestGameInstanceList"](game_);
+	};
+	Acts.prototype.SignallingRequestRoomList = function (game_, instance_, which_)
+	{
+		if (!isSupported)
+			return;
+		var whichstr = "all";
+		if (which_ === 1)
+			whichstr = "unlocked";
+		else if (which_ === 2)
+			whichstr = "available";
+		this.mp["signallingRequestRoomList"](game_, instance_, whichstr);
+	};
+	Acts.prototype.SetBandwidthProfile = function (profile)
+	{
+		if (!isSupported)
+			return;
+		var updateRate, delay;
+		if (profile === 0)		// Internet
+		{
+			updateRate = 30;	// 30 Hz updates
+			delay = 80;			// 80 ms buffer
+		}
+		else
+		{
+			updateRate = 60;	// 60 Hz updates
+			delay = 40;			// 40ms buffer
+		}
+		this.mp["setBandwidthSettings"](updateRate, delay);
+	};
+	Acts.prototype.KickPeer = function (peerid_, reason_)
+	{
+		if (!isSupported)
+			return;
+		if (!this.mp["isHost"]())
+			return;
+		if (peerid_ === this.mp["getMyID"]())
+			return;		// can't kick self
+		var peer = this.mp["getPeerById"](peerid_);
+		if (!peer)
+			return;
+		peer["remove"](reason_, true /* isKick */);
+	};
+	pluginProto.acts = new Acts();
+	function Exps() {};
+	Exps.prototype.ServerListCount = function (ret)
+	{
+		ret.set_int(serverlist.length);
+	};
+	Exps.prototype.ServerListURLAt = function (ret, i)
+	{
+		i = Math.floor(i);
+		if (i < 0 || i >= serverlist.length)
+			ret.set_string("");
+		else
+			ret.set_string(serverlist[i]["url"]);
+	};
+	Exps.prototype.ServerListNameAt = function (ret, i)
+	{
+		i = Math.floor(i);
+		if (i < 0 || i >= serverlist.length)
+			ret.set_string("");
+		else
+			ret.set_string(serverlist[i]["name"]);
+	};
+	Exps.prototype.ServerListOperatorAt = function (ret, i)
+	{
+		i = Math.floor(i);
+		if (i < 0 || i >= serverlist.length)
+			ret.set_string("");
+		else
+			ret.set_string(serverlist[i]["operator"]);
+	};
+	Exps.prototype.ServerListWebsiteAt = function (ret, i)
+	{
+		i = Math.floor(i);
+		if (i < 0 || i >= serverlist.length)
+			ret.set_string("");
+		else
+			ret.set_string(serverlist[i]["operator_website"]);
+	};
+	Exps.prototype.SignallingURL = function (ret)
+	{
+		ret.set_string(this.signallingUrl);
+	};
+	Exps.prototype.SignallingVersion = function (ret)
+	{
+		ret.set_string(isSupported ? this.mp["sigserv_version"] : "");
+	};
+	Exps.prototype.SignallingName = function (ret)
+	{
+		ret.set_string(isSupported ? this.mp["sigserv_name"] : "");
+	};
+	Exps.prototype.SignallingOperator = function (ret)
+	{
+		ret.set_string(isSupported ? this.mp["sigserv_operator"] : "");
+	};
+	Exps.prototype.SignallingMOTD = function (ret)
+	{
+		ret.set_string(isSupported ? this.mp["sigserv_motd"] : "");
+	};
+	Exps.prototype.MyAlias = function (ret)
+	{
+		ret.set_string(isSupported ? this.mp["getMyAlias"]() : "");
+	};
+	Exps.prototype.CurrentGame = function (ret)
+	{
+		ret.set_string(isSupported ? this.mp["getCurrentGame"]() : "");
+	};
+	Exps.prototype.CurrentInstance = function (ret)
+	{
+		ret.set_string(isSupported ? this.mp["getCurrentGameInstance"]() : "");
+	};
+	Exps.prototype.CurrentRoom = function (ret)
+	{
+		ret.set_string(isSupported ? this.mp["getCurrentRoom"]() : "");
+	};
+	Exps.prototype.ErrorMessage = function (ret)
+	{
+		ret.set_string(this.errorMsg);
+	};
+	Exps.prototype.MyID = function (ret)
+	{
+		ret.set_string(isSupported ? this.mp["getMyID"]() : "");
+	};
+	Exps.prototype.PeerID = function (ret)
+	{
+		ret.set_string(this.peerID);
+	};
+	Exps.prototype.PeerAlias = function (ret)
+	{
+		ret.set_string(this.peerAlias);
+	};
+	Exps.prototype.HostID = function (ret)
+	{
+		ret.set_string(isSupported ? this.mp["getHostID"]() : "");
+	};
+	Exps.prototype.HostAlias = function (ret)
+	{
+		ret.set_string(isSupported ? this.mp["getHostAlias"]() : "");
+	};
+	Exps.prototype.Message = function (ret)
+	{
+		ret.set_string(this.msgContent);
+	};
+	Exps.prototype.Tag = function (ret)
+	{
+		ret.set_string(this.msgTag);
+	};
+	Exps.prototype.FromID = function (ret)
+	{
+		ret.set_string(this.msgFromId);
+	};
+	Exps.prototype.FromAlias = function (ret)
+	{
+		ret.set_string(this.msgFromAlias);
+	};
+	Exps.prototype.PeerAliasFromID = function (ret, id_)
+	{
+		ret.set_string(isSupported ? this.mp["getAliasFromId"](id_) : "");
+	};
+	Exps.prototype.PeerLatency = function (ret, id_)
+	{
+		if (!isSupported)
+		{
+			ret.set_float(0);
+			return;
+		}
+		var peer = this.mp["getPeerById"](id_);
+		ret.set_float(peer ? peer["latency"] : 0);
+	};
+	Exps.prototype.PeerPDV = function (ret, id_)
+	{
+		if (!isSupported)
+		{
+			ret.set_float(0);
+			return;
+		}
+		var peer = this.mp["getPeerById"](id_);
+		ret.set_float(peer ? peer["pdv"] : 0);
+	};
+	Exps.prototype.StatOutboundCount = function (ret)
+	{
+		ret.set_int(isSupported ? this.mp["stats"]["outboundPerSec"] : 0);
+	};
+	Exps.prototype.StatOutboundBandwidth = function (ret)
+	{
+		ret.set_int(isSupported ? this.mp["stats"]["outboundBandwidthPerSec"] : 0);
+	};
+	Exps.prototype.StatInboundCount = function (ret)
+	{
+		ret.set_int(isSupported ? this.mp["stats"]["inboundPerSec"] : 0);
+	};
+	Exps.prototype.StatInboundBandwidth = function (ret)
+	{
+		ret.set_int(isSupported ? this.mp["stats"]["inboundBandwidthPerSec"] : 0);
+	};
+	Exps.prototype.PeerState = function (ret, id_, tag_)
+	{
+		if (!isSupported)
+		{
+			ret.set_float(0);
+			return;
+		}
+		var peer = this.mp["getPeerById"](id_);
+		ret.set_float(peer ? peer["getInterpClientState"](tag_) : 0);
+	};
+	Exps.prototype.ClientXError = function (ret)
+	{
+		ret.set_float(clientXerror);
+	};
+	Exps.prototype.ClientYError = function (ret)
+	{
+		ret.set_float(clientYerror);
+	};
+	Exps.prototype.HostX = function (ret)
+	{
+		ret.set_float(hostX);
+	};
+	Exps.prototype.HostY = function (ret)
+	{
+		ret.set_float(hostY);
+	};
+	Exps.prototype.PeerCount = function (ret)
+	{
+		ret.set_int(isSupported ? this.mp["getPeerCount"]() : 0);
+	};
+	Exps.prototype.ListInstanceCount = function (ret)
+	{
+		if (this.gameInstanceList)
+		{
+			ret.set_int(this.gameInstanceList.length);
+		}
+		else
+			ret.set_int(0);
+	};
+	Exps.prototype.ListInstanceName = function (ret, index)
+	{
+		index = Math.floor(index);
+		if (this.gameInstanceList)
+		{
+			if (index < 0 || index >= this.gameInstanceList.length)
+			{
+				ret.set_string("");
+			}
+			else
+				ret.set_string(this.gameInstanceList[index]["name"] || "");
+		}
+		else
+			ret.set_string("");
+	};
+	Exps.prototype.ListInstancePeerCount = function (ret, index)
+	{
+		index = Math.floor(index);
+		if (this.gameInstanceList)
+		{
+			if (index < 0 || index >= this.gameInstanceList.length)
+			{
+				ret.set_int(0);
+			}
+			else
+				ret.set_int(this.gameInstanceList[index]["peercount"] || 0);
+		}
+		else
+			ret.set_int(0);
+	};
+	Exps.prototype.ListRoomCount = function (ret)
+	{
+		ret.set_int(this.roomList ? this.roomList.length : 0);
+	};
+	function getListRoomAt(roomList, i)
+	{
+		if (!roomList)
+			return null;
+		i = Math.floor(i);
+		if (i < 0 || i >= roomList.length)
+			return null;
+		return roomList[i];
+	};
+	Exps.prototype.ListRoomName = function (ret, index)
+	{
+		var r = getListRoomAt(this.roomList, index);
+		ret.set_string(r ? r["name"] : "");
+	};
+	Exps.prototype.ListRoomPeerCount = function (ret, index)
+	{
+		var r = getListRoomAt(this.roomList, index);
+		ret.set_int(r ? r["peercount"] : 0);
+	};
+	Exps.prototype.ListRoomMaxPeerCount = function (ret, index)
+	{
+		var r = getListRoomAt(this.roomList, index);
+		ret.set_int(r ? r["maxpeercount"] : 0);
+	};
+	Exps.prototype.ListRoomState = function (ret, index)
+	{
+		var r = getListRoomAt(this.roomList, index);
+		ret.set_string(r ? r["state"] : "");
+	};
+	Exps.prototype.LeaveReason = function (ret)
+	{
+		ret.set_string(this.leaveReason);
+	};
+	instanceProto.lagCompensate = function (movingPeerID, fromPeerID, tag, interp)
+	{
+		if (!isSupported)
+			return 0;
+		if (!this.mp["isHost"]())
+			return 0;
+		var movePeer = this.mp["getPeerById"](movingPeerID);
+		if (!movePeer)
+			return 0;
+		var moveInst = this.getAssociatedInstanceForPeer(movePeer);
+		if (!moveInst)
+			return 0;
+		var ret = 0;
+		switch (tag) {
+		case "x":	ret = moveInst.x;		break;
+		case "y":	ret = moveInst.y;		break;
+		case "a":	ret = moveInst.angle;	break;
+		}
+		var fromPeer = this.mp["getPeerById"](fromPeerID);
+		if (!fromPeer || fromPeer === movePeer)		// cannot find that peer or is same peer
+			return ret;
+		if (this.mp["me"] === fromPeer)
+			return ret;
+		var delay = (fromPeer["latency"] + this.mp["clientDelay"]) * 2;
+		var moveUid = moveInst.uid;
+		if (!this.objectHistories.hasOwnProperty(moveUid))
+			return ret;		// no object history data yet
+		var oh = this.objectHistories[moveUid];
+		var interp = oh.getInterp(tag, 0, cr.performance_now() - delay, interp);
+		if (typeof interp === "undefined")
+			return ret;
+		else
+			return interp;
+	};
+	Exps.prototype.LagCompensateX = function (ret, movingPeerID, fromPeerID)
+	{
+		ret.set_float(this.lagCompensate(movingPeerID, fromPeerID, "x", this.mp["INTERP_LINEAR"]));
+	};
+	Exps.prototype.LagCompensateY = function (ret, movingPeerID, fromPeerID)
+	{
+		ret.set_float(this.lagCompensate(movingPeerID, fromPeerID, "y", this.mp["INTERP_LINEAR"]));
+	};
+	Exps.prototype.LagCompensateAngle = function (ret, movingPeerID, fromPeerID)
+	{
+		ret.set_float(cr.to_degrees(this.lagCompensate(movingPeerID, fromPeerID, "a", this.mp["INTERP_ANGULAR"])));
+	};
+	Exps.prototype.PeerIDAt = function (ret, i)
+	{
+		if (!isSupported)
+		{
+			ret.set_string("");
+			return;
+		}
+		i = Math.floor(i);
+		var peer = this.mp["getPeerAt"](i);
+		ret.set_string(peer ? peer["id"] : "");
+	};
+	Exps.prototype.PeerAliasAt = function (ret, i)
+	{
+		if (!isSupported)
+		{
+			ret.set_string("");
+			return;
+		}
+		i = Math.floor(i);
+		var peer = this.mp["getPeerAt"](i);
+		ret.set_string(peer ? peer["alias"] : "");
+	};
+	pluginProto.exps = new Exps();
+}());
+;
+;
 cr.plugins_.Sprite = function(runtime)
 {
 	this.runtime = runtime;
@@ -20756,47 +22403,78 @@ cr.behaviors.Rex_textbox_color = function(runtime)
 	};
 }());
 cr.getObjectRefTable = function () { return [
+	cr.plugins_.c2canvas,
 	cr.plugins_.AJAX,
 	cr.plugins_.Browser,
-	cr.plugins_.c2canvas,
 	cr.plugins_.Dictionary,
+	cr.plugins_.Mouse,
 	cr.plugins_.Function,
+	cr.plugins_.Multiplayer,
 	cr.plugins_.Sprite,
-	cr.plugins_.TextBox,
-	cr.plugins_.Touch,
 	cr.plugins_.Text,
+	cr.plugins_.Touch,
+	cr.plugins_.TextBox,
 	cr.behaviors.Rex_textbox_color,
-	cr.system_object.prototype.cnds.OnLayoutStart,
-	cr.plugins_.Function.prototype.acts.CallFunction,
-	cr.plugins_.AJAX.prototype.cnds.OnAnyComplete,
-	cr.plugins_.Text.prototype.acts.SetText,
-	cr.plugins_.AJAX.prototype.exps.LastData,
+	cr.system_object.prototype.cnds.IsGroupActive,
 	cr.plugins_.Function.prototype.cnds.OnFunction,
-	cr.plugins_.AJAX.prototype.acts.Post,
-	cr.system_object.prototype.acts.WaitForSignal,
-	cr.system_object.prototype.cnds.Repeat,
-	cr.system_object.prototype.exps.tokencount,
-	cr.system_object.prototype.cnds.Compare,
-	cr.system_object.prototype.exps.tokenat,
-	cr.system_object.prototype.exps.loopindex,
-	cr.plugins_.c2canvas.prototype.acts.DrawPoint,
-	cr.system_object.prototype.exps["int"],
-	cr.plugins_.Browser.prototype.acts.ConsoleLog,
-	cr.plugins_.Dictionary.prototype.cnds.ForEachKey,
-	cr.plugins_.Dictionary.prototype.exps.CurrentKey,
-	cr.plugins_.Dictionary.prototype.exps.CurrentValue,
-	cr.plugins_.AJAX.prototype.cnds.OnComplete,
-	cr.system_object.prototype.acts.Signal,
-	cr.plugins_.Touch.prototype.cnds.OnTouchObject,
-	cr.system_object.prototype.acts.SetVar,
-	cr.system_object.prototype.exps.round,
+	cr.plugins_.Multiplayer.prototype.acts.SignallingConnect,
+	cr.plugins_.Multiplayer.prototype.cnds.OnSignallingConnected,
+	cr.plugins_.Multiplayer.prototype.acts.SignallingLogin,
+	cr.system_object.prototype.exps.str,
+	cr.system_object.prototype.exps.random,
+	cr.plugins_.Multiplayer.prototype.cnds.OnSignallingLoggedIn,
+	cr.plugins_.Multiplayer.prototype.acts.SignallingJoinRoom,
+	cr.plugins_.AJAX.prototype.exps.LastData,
+	cr.plugins_.Multiplayer.prototype.cnds.OnSignallingJoinedRoom,
+	cr.plugins_.Multiplayer.prototype.cnds.IsHost,
+	cr.plugins_.Multiplayer.prototype.acts.SignallingLeaveRoom,
+	cr.system_object.prototype.acts.SetGroupActive,
+	cr.plugins_.Text.prototype.acts.SetText,
+	cr.plugins_.Multiplayer.prototype.cnds.SignallingIsInRoom,
+	cr.system_object.prototype.cnds.Every,
+	cr.plugins_.Multiplayer.prototype.cnds.OnSignallingLeftRoom,
+	cr.plugins_.Touch.prototype.cnds.OnTouchEnd,
+	cr.plugins_.Touch.prototype.cnds.IsTouchingObject,
+	cr.plugins_.Multiplayer.prototype.acts.SendPeerMessage,
+	cr.system_object.prototype.exps.floor,
 	cr.plugins_.Touch.prototype.exps.X,
 	cr.plugins_.Touch.prototype.exps.Y,
 	cr.behaviors.Rex_textbox_color.prototype.exps.R,
 	cr.behaviors.Rex_textbox_color.prototype.exps.G,
 	cr.behaviors.Rex_textbox_color.prototype.exps.B,
-	cr.plugins_.Dictionary.prototype.acts.AddKey,
-	cr.system_object.prototype.cnds.Every,
+	cr.plugins_.Multiplayer.prototype.cnds.OnPeerMessage,
+	cr.plugins_.c2canvas.prototype.acts.DrawPoint,
+	cr.system_object.prototype.exps["int"],
+	cr.system_object.prototype.exps.tokenat,
+	cr.plugins_.Multiplayer.prototype.exps.Message,
+	cr.plugins_.Dictionary.prototype.acts.JSONLoad,
+	cr.plugins_.Function.prototype.acts.CallFunction,
+	cr.plugins_.Text.prototype.cnds.CompareInstanceVar,
+	cr.system_object.prototype.acts.SetVar,
+	cr.system_object.prototype.exps["float"],
+	cr.system_object.prototype.cnds.EveryTick,
+	cr.system_object.prototype.acts.SubVar,
+	cr.system_object.prototype.exps.dt,
+	cr.system_object.prototype.cnds.IsMobile,
+	cr.plugins_.Sprite.prototype.acts.SetPos,
+	cr.system_object.prototype.exps.lerp,
+	cr.plugins_.Sprite.prototype.exps.X,
+	cr.plugins_.Sprite.prototype.exps.Y,
+	cr.plugins_.Sprite.prototype.acts.SetOpacity,
+	cr.plugins_.Sprite.prototype.exps.Opacity,
+	cr.plugins_.Mouse.prototype.cnds.IsOverObject,
+	cr.plugins_.Mouse.prototype.exps.X,
+	cr.plugins_.Mouse.prototype.exps.Y,
+	cr.system_object.prototype.cnds.CompareVar,
+	cr.system_object.prototype.exps.left,
+	cr.plugins_.Multiplayer.prototype.exps.PeerCount,
+	cr.system_object.prototype.cnds.OnLayoutStart,
+	cr.plugins_.AJAX.prototype.acts.Request,
+	cr.plugins_.AJAX.prototype.cnds.OnComplete,
+	cr.plugins_.Browser.prototype.acts.ConsoleLog,
 	cr.plugins_.Browser.prototype.cnds.OnUpdateReady,
-	cr.plugins_.Text.prototype.acts.SetVisible
+	cr.plugins_.Text.prototype.acts.SetVisible,
+	cr.plugins_.Dictionary.prototype.cnds.ForEachKey,
+	cr.plugins_.Dictionary.prototype.exps.CurrentKey,
+	cr.plugins_.Dictionary.prototype.exps.CurrentValue
 ];};
