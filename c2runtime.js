@@ -22304,6 +22304,204 @@ cr.plugins_.c2canvas = function(runtime)
 }());
 ;
 ;
+cr.behaviors.Fade = function(runtime)
+{
+	this.runtime = runtime;
+};
+(function ()
+{
+	var behaviorProto = cr.behaviors.Fade.prototype;
+	behaviorProto.Type = function(behavior, objtype)
+	{
+		this.behavior = behavior;
+		this.objtype = objtype;
+		this.runtime = behavior.runtime;
+	};
+	var behtypeProto = behaviorProto.Type.prototype;
+	behtypeProto.onCreate = function()
+	{
+	};
+	behaviorProto.Instance = function(type, inst)
+	{
+		this.type = type;
+		this.behavior = type.behavior;
+		this.inst = inst;				// associated object instance to modify
+		this.runtime = type.runtime;
+	};
+	var behinstProto = behaviorProto.Instance.prototype;
+	behinstProto.onCreate = function()
+	{
+		this.activeAtStart = this.properties[0] === 1;
+		this.setMaxOpacity = false;					// used to retrieve maxOpacity once in first 'Start fade' action if initially inactive
+		this.fadeInTime = this.properties[1];
+		this.waitTime = this.properties[2];
+		this.fadeOutTime = this.properties[3];
+		this.destroy = this.properties[4];			// 0 = no, 1 = after fade out
+		this.stage = this.activeAtStart ? 0 : 3;		// 0 = fade in, 1 = wait, 2 = fade out, 3 = done
+		if (this.recycled)
+			this.stageTime.reset();
+		else
+			this.stageTime = new cr.KahanAdder();
+		this.maxOpacity = (this.inst.opacity ? this.inst.opacity : 1.0);
+		if (this.activeAtStart)
+		{
+			if (this.fadeInTime === 0)
+			{
+				this.stage = 1;
+				if (this.waitTime === 0)
+					this.stage = 2;
+			}
+			else
+			{
+				this.inst.opacity = 0;
+				this.runtime.redraw = true;
+			}
+		}
+	};
+	behinstProto.saveToJSON = function ()
+	{
+		return {
+			"fit": this.fadeInTime,
+			"wt": this.waitTime,
+			"fot": this.fadeOutTime,
+			"s": this.stage,
+			"st": this.stageTime.sum,
+			"mo": this.maxOpacity,
+		};
+	};
+	behinstProto.loadFromJSON = function (o)
+	{
+		this.fadeInTime = o["fit"];
+		this.waitTime = o["wt"];
+		this.fadeOutTime = o["fot"];
+		this.stage = o["s"];
+		this.stageTime.reset();
+		this.stageTime.sum = o["st"];
+		this.maxOpacity = o["mo"];
+	};
+	behinstProto.tick = function ()
+	{
+		this.stageTime.add(this.runtime.getDt(this.inst));
+		if (this.stage === 0)
+		{
+			this.inst.opacity = (this.stageTime.sum / this.fadeInTime) * this.maxOpacity;
+			this.runtime.redraw = true;
+			if (this.inst.opacity >= this.maxOpacity)
+			{
+				this.inst.opacity = this.maxOpacity;
+				this.stage = 1;	// wait stage
+				this.stageTime.reset();
+				this.runtime.trigger(cr.behaviors.Fade.prototype.cnds.OnFadeInEnd, this.inst);
+			}
+		}
+		if (this.stage === 1)
+		{
+			if (this.stageTime.sum >= this.waitTime)
+			{
+				this.stage = 2;	// fade out stage
+				this.stageTime.reset();
+				this.runtime.trigger(cr.behaviors.Fade.prototype.cnds.OnWaitEnd, this.inst);
+			}
+		}
+		if (this.stage === 2)
+		{
+			if (this.fadeOutTime !== 0)
+			{
+				this.inst.opacity = this.maxOpacity - ((this.stageTime.sum / this.fadeOutTime) * this.maxOpacity);
+				this.runtime.redraw = true;
+				if (this.inst.opacity < 0)
+				{
+					this.inst.opacity = 0;
+					this.stage = 3;	// done
+					this.stageTime.reset();
+					this.runtime.trigger(cr.behaviors.Fade.prototype.cnds.OnFadeOutEnd, this.inst);
+					if (this.destroy === 1)
+						this.runtime.DestroyInstance(this.inst);
+				}
+			}
+		}
+	};
+	behinstProto.doStart = function ()
+	{
+		this.stage = 0;
+		this.stageTime.reset();
+		if (this.fadeInTime === 0)
+		{
+			this.stage = 1;
+			if (this.waitTime === 0)
+				this.stage = 2;
+		}
+		else
+		{
+			this.inst.opacity = 0;
+			this.runtime.redraw = true;
+		}
+	};
+	function Cnds() {};
+	Cnds.prototype.OnFadeOutEnd = function ()
+	{
+		return true;
+	};
+	Cnds.prototype.OnFadeInEnd = function ()
+	{
+		return true;
+	};
+	Cnds.prototype.OnWaitEnd = function ()
+	{
+		return true;
+	};
+	behaviorProto.cnds = new Cnds();
+	function Acts() {};
+	Acts.prototype.StartFade = function ()
+	{
+		if (!this.activeAtStart && !this.setMaxOpacity)
+		{
+			this.maxOpacity = (this.inst.opacity ? this.inst.opacity : 1.0);
+			this.setMaxOpacity = true;
+		}
+		if (this.stage === 3)
+			this.doStart();
+	};
+	Acts.prototype.RestartFade = function ()
+	{
+		this.doStart();
+	};
+	Acts.prototype.SetFadeInTime = function (t)
+	{
+		if (t < 0)
+			t = 0;
+		this.fadeInTime = t;
+	};
+	Acts.prototype.SetWaitTime = function (t)
+	{
+		if (t < 0)
+			t = 0;
+		this.waitTime = t;
+	};
+	Acts.prototype.SetFadeOutTime = function (t)
+	{
+		if (t < 0)
+			t = 0;
+		this.fadeOutTime = t;
+	};
+	behaviorProto.acts = new Acts();
+	function Exps() {};
+	Exps.prototype.FadeInTime = function (ret)
+	{
+		ret.set_float(this.fadeInTime);
+	};
+	Exps.prototype.WaitTime = function (ret)
+	{
+		ret.set_float(this.waitTime);
+	};
+	Exps.prototype.FadeOutTime = function (ret)
+	{
+		ret.set_float(this.fadeOutTime);
+	};
+	behaviorProto.exps = new Exps();
+}());
+;
+;
 cr.behaviors.Rex_textbox_color = function(runtime)
 {
 	this.runtime = runtime;
@@ -22408,13 +22606,14 @@ cr.getObjectRefTable = function () { return [
 	cr.plugins_.Browser,
 	cr.plugins_.Dictionary,
 	cr.plugins_.Mouse,
-	cr.plugins_.Function,
 	cr.plugins_.Multiplayer,
-	cr.plugins_.Sprite,
+	cr.plugins_.Function,
+	cr.plugins_.TextBox,
 	cr.plugins_.Text,
 	cr.plugins_.Touch,
-	cr.plugins_.TextBox,
+	cr.plugins_.Sprite,
 	cr.behaviors.Rex_textbox_color,
+	cr.behaviors.Fade,
 	cr.system_object.prototype.cnds.IsGroupActive,
 	cr.plugins_.Function.prototype.cnds.OnFunction,
 	cr.plugins_.Multiplayer.prototype.acts.SignallingConnect,
@@ -22424,7 +22623,6 @@ cr.getObjectRefTable = function () { return [
 	cr.system_object.prototype.exps.random,
 	cr.plugins_.Multiplayer.prototype.cnds.OnSignallingLoggedIn,
 	cr.plugins_.Multiplayer.prototype.acts.SignallingJoinRoom,
-	cr.plugins_.AJAX.prototype.exps.LastData,
 	cr.plugins_.Multiplayer.prototype.cnds.OnSignallingJoinedRoom,
 	cr.plugins_.Multiplayer.prototype.cnds.IsHost,
 	cr.plugins_.Multiplayer.prototype.acts.SignallingLeaveRoom,
@@ -22435,6 +22633,7 @@ cr.getObjectRefTable = function () { return [
 	cr.plugins_.Multiplayer.prototype.cnds.OnSignallingLeftRoom,
 	cr.plugins_.Touch.prototype.cnds.OnTouchEnd,
 	cr.plugins_.Touch.prototype.cnds.IsTouchingObject,
+	cr.system_object.prototype.cnds.CompareVar,
 	cr.plugins_.Multiplayer.prototype.acts.SendPeerMessage,
 	cr.system_object.prototype.exps.floor,
 	cr.plugins_.Touch.prototype.exps.X,
@@ -22447,11 +22646,14 @@ cr.getObjectRefTable = function () { return [
 	cr.system_object.prototype.exps["int"],
 	cr.system_object.prototype.exps.tokenat,
 	cr.plugins_.Multiplayer.prototype.exps.Message,
+	cr.system_object.prototype.acts.CreateObject,
 	cr.plugins_.Dictionary.prototype.acts.JSONLoad,
 	cr.plugins_.Function.prototype.acts.CallFunction,
 	cr.plugins_.Text.prototype.cnds.CompareInstanceVar,
 	cr.system_object.prototype.acts.SetVar,
 	cr.system_object.prototype.exps["float"],
+	cr.system_object.prototype.acts.Wait,
+	cr.plugins_.Text.prototype.acts.SetVisible,
 	cr.system_object.prototype.cnds.EveryTick,
 	cr.system_object.prototype.acts.SubVar,
 	cr.system_object.prototype.exps.dt,
@@ -22465,16 +22667,29 @@ cr.getObjectRefTable = function () { return [
 	cr.plugins_.Mouse.prototype.cnds.IsOverObject,
 	cr.plugins_.Mouse.prototype.exps.X,
 	cr.plugins_.Mouse.prototype.exps.Y,
-	cr.system_object.prototype.cnds.CompareVar,
 	cr.system_object.prototype.exps.left,
 	cr.plugins_.Multiplayer.prototype.exps.PeerCount,
 	cr.system_object.prototype.cnds.OnLayoutStart,
 	cr.plugins_.AJAX.prototype.acts.Request,
+	cr.system_object.prototype.acts.SetCanvasSize,
+	cr.plugins_.Sprite.prototype.cnds.CompareInstanceVar,
+	cr.plugins_.Sprite.prototype.acts.SetWidth,
 	cr.plugins_.AJAX.prototype.cnds.OnComplete,
 	cr.plugins_.Browser.prototype.acts.ConsoleLog,
+	cr.plugins_.AJAX.prototype.exps.LastData,
 	cr.plugins_.Browser.prototype.cnds.OnUpdateReady,
-	cr.plugins_.Text.prototype.acts.SetVisible,
 	cr.plugins_.Dictionary.prototype.cnds.ForEachKey,
 	cr.plugins_.Dictionary.prototype.exps.CurrentKey,
-	cr.plugins_.Dictionary.prototype.exps.CurrentValue
+	cr.plugins_.Dictionary.prototype.exps.CurrentValue,
+	cr.plugins_.Touch.prototype.cnds.OnTouchStart,
+	cr.plugins_.Touch.prototype.exps.TouchID,
+	cr.system_object.prototype.cnds.Else,
+	cr.system_object.prototype.exps.distance,
+	cr.plugins_.Touch.prototype.exps.XForID,
+	cr.plugins_.Touch.prototype.exps.YForID,
+	cr.system_object.prototype.exps.layoutscale,
+	cr.system_object.prototype.acts.Scroll,
+	cr.system_object.prototype.exps.scrollx,
+	cr.system_object.prototype.exps.scrolly,
+	cr.system_object.prototype.acts.SetLayoutScale
 ];};
